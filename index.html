@@ -49,6 +49,8 @@
         overflow: scroll; 
         min-width: 50px; min-height: 50px;
         transition: border-color 0.2s;
+        /* Prevent text wrapping and force horizontal scroll */
+        white-space: nowrap; 
     }
     .rect::-webkit-scrollbar { width: 14px; height: 14px; }
     .rect::-webkit-scrollbar-track { background: #f1f1f1; border-left: 1px solid #ccc; border-top: 1px solid #ccc; }
@@ -94,6 +96,7 @@
     <div class="toolbar">
         <button id="btn-reset-focus">Reset Focus</button>
         <button id="btn-copy">Copy</button>
+        <button id="btn-move">Move</button>
         <button id="btn-delete">FORCE DELETE</button>
         <button id="btn-save">Save JSON</button>
         <button id="btn-load">Load JSON</button>
@@ -180,6 +183,7 @@
     // --- Interaction Logic ---
     let isPanning = false, panStartX, panStartY, panStartOffsetX, panStartOffsetY;
     let isSelecting = false, selStartX, selStartY;
+    let isMovingSelected = false, lastMoveMouseX, lastMoveMouseY;
 
     viewport.addEventListener('mousedown', (e) => {
         if (e.target.closest('#context-menu') || e.target.closest('#line-dialog') || e.target.closest('#ui-layer')) return;
@@ -210,6 +214,15 @@
             return;
         }
 
+        // New Move Mode Interaction
+        if (state.mode === 'moving' && e.button === 0) {
+            isMovingSelected = true;
+            lastMoveMouseX = e.clientX;
+            lastMoveMouseY = e.clientY;
+            e.preventDefault();
+            return; 
+        }
+
         if (e.button === 0 && !e.target.closest('.rect') && !e.target.closest('path') && !e.target.closest('.resize-handle')) {
             clearSelection();
             if (state.activeRectId) exitActiveMode();
@@ -230,6 +243,24 @@
             state.offsetX = panStartOffsetX + (e.clientX - panStartX);
             state.offsetY = panStartOffsetY + (e.clientY - panStartY);
             applyTransform();
+            return;
+        }
+
+        // New Move Mode Translation
+        if (isMovingSelected) {
+            const dx = (e.clientX - lastMoveMouseX) / state.scale;
+            const dy = (e.clientY - lastMoveMouseY) / state.scale;
+
+            state.selectedRectIds.forEach(id => {
+                const rect = state.rects[id];
+                rect.x += dx;
+                rect.y += dy;
+                updateRectDOM(id);
+            });
+            renderLines();
+
+            lastMoveMouseX = e.clientX;
+            lastMoveMouseY = e.clientY;
             return;
         }
         
@@ -270,14 +301,20 @@
 
     window.addEventListener('mouseup', (e) => {
         isPanning = false;
+
+        // Stop moving active drag
+        if (isMovingSelected) {
+            isMovingSelected = false;
+        }
+
         if (state.mode === 'resizing') {
             state.resizeConfig = null;
         }
         if (isSelecting) {
-            computeSelectionBox(); // 🔥 MOVED THIS UP! Computes BEFORE the box hides! 🔥
+            computeSelectionBox(); 
             isSelecting = false;
             state.mode = 'idle';
-            selectionBox.style.display = 'none'; // Now it hides.
+            selectionBox.style.display = 'none'; 
         }
     });
 
@@ -360,6 +397,7 @@
             exitActiveMode();
             exitLinkingMode();
             exitResizeMode();
+            exitMoveMode();
             clearSelection();
             lineDialog.style.display = 'none';
             contextMenu.style.display = 'none';
@@ -402,7 +440,7 @@
         el.addEventListener('mouseleave', () => { if (state.hoveredRectId === id) state.hoveredRectId = null; });
         
         el.addEventListener('mousedown', (e) => {
-            if(state.mode === 'linking') return; 
+            if(state.mode === 'linking' || state.mode === 'moving') return; 
             e.stopPropagation(); 
             if (state.activeRectId !== id) enterActiveMode(id);
         });
@@ -461,6 +499,11 @@
     function exitResizeMode() {
         state.mode = 'idle';
         document.querySelectorAll('.resize-handle').forEach(el => el.remove());
+    }
+
+    function exitMoveMode() {
+        state.mode = 'idle';
+        isMovingSelected = false;
     }
 
     function renderResizeHandles(id) {
@@ -640,7 +683,7 @@
         renderLines();
     }
 
-    // 🔥 THE MERCILESS FORCE DELETE FUNCTION 🔥
+    // 💣 THE MERCILESS FORCE DELETE FUNCTION 💣
     function forceDelete() {
         let itemsDeleted = false;
 
@@ -725,7 +768,7 @@
             el.addEventListener('mouseenter', () => state.hoveredRectId = newId);
             el.addEventListener('mouseleave', () => { if (state.hoveredRectId === newId) state.hoveredRectId = null; });
             el.addEventListener('mousedown', (e) => {
-                if(state.mode === 'linking') return;
+                if(state.mode === 'linking' || state.mode === 'moving') return;
                 e.stopPropagation();
                 if (state.activeRectId !== newId) enterActiveMode(newId);
             });
@@ -758,6 +801,12 @@
 
     document.getElementById('btn-copy').onclick = () => {
         copySelected();
+    };
+
+    document.getElementById('btn-move').onclick = () => {
+        if (state.selectedRectIds.size === 0) return; 
+        exitActiveMode();
+        state.mode = 'moving';
     };
 
     // --- Viewport Utilities ---
@@ -828,7 +877,7 @@
                     el.addEventListener('mouseenter', () => state.hoveredRectId = id);
                     el.addEventListener('mouseleave', () => { if (state.hoveredRectId === id) state.hoveredRectId = null; });
                     el.addEventListener('mousedown', (e) => {
-                        if(state.mode === 'linking') return;
+                        if(state.mode === 'linking' || state.mode === 'moving') return;
                         e.stopPropagation();
                         if (state.activeRectId !== id) enterActiveMode(id);
                     });
