@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Infinite Canvas App</title>
+<style>
+    /* Reset & Base Styles */
+    html, body {
+        margin: 0; padding: 0; width: 100%; height: 100%;
+        overflow: hidden; font-family: sans-serif;
+        background-color: #e5e5f7;
+        background-image: radial-gradient(#ccc 1px, transparent 1px);
+        background-size: 20px 20px;
+    }
+
+    /* UI Overlay */
+    #ui-layer {
+        position: absolute; top: 10px; left: 10px; z-index: 100;
+        display: flex; gap: 10px; flex-wrap: wrap;
+        pointer-events: none; 
+    }
+    #ui-layer > * { pointer-events: auto; }
+    
+    .toolbar {
+        background: white; border: 1px solid #aaa; border-radius: 6px;
+        padding: 5px; display: flex; gap: 5px; align-items: center;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    button { cursor: pointer; padding: 5px 10px; border: 1px solid #ddd; background: #f9f9f9; border-radius: 4px; }
+    button:hover { background: #eee; }
+    button#btn-delete { background: #ffe5e5; border-color: #ffcccc; color: #cc0000; font-weight: bold; }
+    button#btn-delete:hover { background: #ffcccc; }
+    input[type="color"] { cursor: pointer; padding: 0; border: none; width: 24px; height: 24px; }
+
+    /* Viewport & Workspace */
+    #viewport { width: 100%; height: 100%; position: absolute; top: 0; left: 0; cursor: default; }
+    #workspace { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+    
+    #svg-layer { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
+    #svg-layer path { pointer-events: stroke; cursor: pointer; transition: stroke 0.2s; }
+    #svg-layer path:hover { stroke: #0056b3; }
+    #svg-layer path.selected { stroke: #ff0000; filter: drop-shadow(0 0 4px #ff0000); }
+
+    /* Rectangles */
+    .rect {
+        position: absolute; background: white; border: 2px solid #333; box-sizing: border-box;
+        padding: 10px; outline: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        overflow: scroll; 
+        min-width: 50px; min-height: 50px;
+        transition: border-color 0.2s;
+    }
+    .rect::-webkit-scrollbar { width: 14px; height: 14px; }
+    .rect::-webkit-scrollbar-track { background: #f1f1f1; border-left: 1px solid #ccc; border-top: 1px solid #ccc; }
+    .rect::-webkit-scrollbar-thumb { background: #a8a8a8; border-radius: 2px; }
+    .rect::-webkit-scrollbar-thumb:hover { background: #888; }
+    .rect::-webkit-scrollbar-corner { background: #f1f1f1; }
+
+    .rect.active { border-color: #007bff; box-shadow: 0 0 0 2px rgba(0,123,255,0.3); }
+    .rect.selected { border-color: #ff0000; }
+    .rect.linking-source { border-color: #28a745; border-style: dashed; }
+
+    /* Resize Handles */
+    .resize-handle {
+        position: absolute; width: 14px; height: 14px; background: #007bff; border: 2px solid white;
+        box-sizing: border-box; z-index: 10; cursor: pointer; border-radius: 50%;
+    }
+
+    /* Context Menu */
+    #context-menu {
+        position: absolute; background: white; border: 1px solid #ccc; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        border-radius: 4px; z-index: 1000; padding: 5px 0; min-width: 150px; display: none;
+    }
+    .menu-item { padding: 8px 15px; cursor: pointer; font-size: 14px; }
+    .menu-item:hover { background: #f0f0f0; }
+
+    /* Selection Box */
+    #selection-box {
+        position: absolute; border: 2px dashed #007bff; background: rgba(0, 123, 255, 0.1);
+        display: none; z-index: 50; pointer-events: none;
+    }
+
+    /* Modals/Dialogs */
+    #line-dialog {
+        position: absolute; background: white; border: 1px solid #333; padding: 10px;
+        border-radius: 5px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); z-index: 1000; display: none;
+    }
+    #line-dialog input { width: 50px; text-transform: uppercase; font-size: 16px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div id="ui-layer">
+    <div class="toolbar">
+        <button id="btn-reset-focus">Reset Focus</button>
+        <button id="btn-copy">Copy</button>
+        <button id="btn-delete">FORCE DELETE</button>
+        <button id="btn-save">Save JSON</button>
+        <button id="btn-load">Load JSON</button>
+        <input type="file" id="file-input" style="display: none;" accept=".json">
+    </div>
+    
+    <div class="toolbar" id="text-tools" style="display: none;">
+        <button onmousedown="event.preventDefault(); document.execCommand('bold', false, null);"><b>B</b></button>
+        <button onmousedown="event.preventDefault(); document.execCommand('italic', false, null);"><i>I</i></button>
+        <button onmousedown="event.preventDefault(); document.execCommand('underline', false, null);"><u>U</u></button>
+        <input type="color" id="color-picker" onchange="document.execCommand('foreColor', false, this.value);" onmousedown="event.preventDefault();">
+    </div>
+    <div style="font-size:12px; color:#555; background:rgba(255,255,255,0.8); padding:5px; border-radius:4px; border:1px solid #ccc;">
+        <strong>Pan:</strong> Middle Mouse / Alt+Drag &nbsp;|&nbsp; <strong>Select:</strong> Click & Drag &nbsp;|&nbsp; <strong>Menu:</strong> Right-Click
+    </div>
+</div>
+
+<div id="viewport">
+    <div id="workspace">
+        <svg id="svg-layer">
+            <defs>
+                <marker id="arrow-end" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#333" />
+                </marker>
+                <marker id="arrow-start" viewBox="0 0 10 10" refX="2" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                    <path d="M 10 0 L 0 5 L 10 10 z" fill="#333" />
+                </marker>
+            </defs>
+            <g id="lines-container"></g>
+        </svg>
+        <div id="html-layer"></div>
+    </div>
+    <div id="selection-box"></div>
+</div>
+
+<div id="context-menu"></div>
+
+<div id="line-dialog">
+    <div>Type 2 letters (W,A,S,D):</div>
+    <input type="text" id="line-wasd-input" maxlength="2">
+    <button id="btn-apply-wasd">Apply</button>
+</div>
+
+<script>
+    // --- Application State ---
+    const state = {
+        rects: {}, 
+        lines: [], 
+        clipboard: null, 
+        scale: 1,
+        offsetX: 0,
+        offsetY: 0,
+        mode: 'idle', 
+        activeRectId: null,
+        hoveredRectId: null,
+        selectedRectIds: new Set(),
+        selectedLineIds: new Set(),
+        linkSourceId: null,
+        linkType: null, 
+        resizeConfig: null 
+    };
+
+    // --- DOM Elements ---
+    const viewport = document.getElementById('viewport');
+    const workspace = document.getElementById('workspace');
+    const htmlLayer = document.getElementById('html-layer');
+    const linesContainer = document.getElementById('lines-container');
+    const contextMenu = document.getElementById('context-menu');
+    const selectionBox = document.getElementById('selection-box');
+    const lineDialog = document.getElementById('line-dialog');
+    const textTools = document.getElementById('text-tools');
+    const fileInput = document.getElementById('file-input');
+
+    // --- Helpers ---
+    function generateId() { return 'id-' + Math.random().toString(36).substr(2, 9); }
+    
+    function screenToWorkspace(x, y) {
+        return {
+            x: (x - state.offsetX) / state.scale,
+            y: (y - state.offsetY) / state.scale
+        };
+    }
+
+    // --- Interaction Logic ---
+    let isPanning = false, panStartX, panStartY, panStartOffsetX, panStartOffsetY;
+    let isSelecting = false, selStartX, selStartY;
+
+    viewport.addEventListener('mousedown', (e) => {
+        if (e.target.closest('#context-menu') || e.target.closest('#line-dialog') || e.target.closest('#ui-layer')) return;
+        
+        contextMenu.style.display = 'none';
+        lineDialog.style.display = 'none';
+
+        if (e.button === 1 || (e.button === 0 && e.altKey)) {
+            isPanning = true;
+            panStartX = e.clientX; panStartY = e.clientY;
+            panStartOffsetX = state.offsetX; panStartOffsetY = state.offsetY;
+            e.preventDefault();
+            return;
+        }
+
+        if (state.mode === 'linking' && e.button === 0) {
+            const rectEl = e.target.closest('.rect');
+            if (rectEl && rectEl.id !== state.linkSourceId) {
+                state.lines.push({
+                    id: generateId(), srcId: state.linkSourceId, dstId: rectEl.id,
+                    type: state.linkType, wasd: null
+                });
+                exitLinkingMode();
+                renderLines();
+            } else if (!rectEl) {
+                exitLinkingMode();
+            }
+            return;
+        }
+
+        if (e.button === 0 && !e.target.closest('.rect') && !e.target.closest('path') && !e.target.closest('.resize-handle')) {
+            clearSelection();
+            if (state.activeRectId) exitActiveMode();
+            
+            isSelecting = true;
+            state.mode = 'selecting';
+            selStartX = e.clientX; selStartY = e.clientY;
+            selectionBox.style.display = 'block';
+            selectionBox.style.left = selStartX + 'px';
+            selectionBox.style.top = selStartY + 'px';
+            selectionBox.style.width = '0px';
+            selectionBox.style.height = '0px';
+        }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (isPanning) {
+            state.offsetX = panStartOffsetX + (e.clientX - panStartX);
+            state.offsetY = panStartOffsetY + (e.clientY - panStartY);
+            applyTransform();
+            return;
+        }
+        
+        if (isSelecting) {
+            const currentX = e.clientX; const currentY = e.clientY;
+            const left = Math.min(selStartX, currentX);
+            const top = Math.min(selStartY, currentY);
+            const width = Math.abs(currentX - selStartX);
+            const height = Math.abs(currentY - selStartY);
+            selectionBox.style.left = left + 'px';
+            selectionBox.style.top = top + 'px';
+            selectionBox.style.width = width + 'px';
+            selectionBox.style.height = height + 'px';
+            return;
+        }
+
+        if (state.mode === 'resizing' && state.resizeConfig) {
+            const wPos = screenToWorkspace(e.clientX, e.clientY);
+            const c = state.resizeConfig;
+            const rect = state.rects[c.id];
+            
+            let newX = rect.x, newY = rect.y, newW = rect.w, newH = rect.h;
+            const dx = wPos.x - c.startX; const dy = wPos.y - c.startY;
+
+            if (c.handle.includes('l')) { newX = rect.x + dx; newW = c.startW - dx; }
+            if (c.handle.includes('r')) { newW = c.startW + dx; }
+            if (c.handle.includes('t')) { newY = rect.y + dy; newH = c.startH - dy; }
+            if (c.handle.includes('b')) { newH = c.startH + dy; }
+
+            if (newW > 40) { rect.x = newX; rect.w = newW; c.startX = wPos.x; c.startW = newW; }
+            if (newH > 40) { rect.y = newY; rect.h = newH; c.startY = wPos.y; c.startH = newH; }
+            
+            updateRectDOM(rect.id);
+            renderLines();
+            renderResizeHandles(rect.id); 
+        }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+        isPanning = false;
+        if (state.mode === 'resizing') {
+            state.resizeConfig = null;
+        }
+        if (isSelecting) {
+            computeSelectionBox(); // 🔥 MOVED THIS UP! Computes BEFORE the box hides! 🔥
+            isSelecting = false;
+            state.mode = 'idle';
+            selectionBox.style.display = 'none'; // Now it hides.
+        }
+    });
+
+    window.addEventListener('wheel', (e) => {
+        if (e.target.closest('.rect')) return; 
+        e.preventDefault();
+        
+        const zoomFactor = 1.1;
+        const pointerX = e.clientX;
+        const pointerY = e.clientY;
+        const oldScale = state.scale;
+        
+        if (e.deltaY < 0) state.scale *= zoomFactor;
+        else state.scale /= zoomFactor;
+        
+        state.scale = Math.max(0.1, Math.min(state.scale, 5)); 
+
+        state.offsetX = pointerX - ((pointerX - state.offsetX) * (state.scale / oldScale));
+        state.offsetY = pointerY - ((pointerY - state.offsetY) * (state.scale / oldScale));
+        applyTransform();
+    }, { passive: false });
+
+
+    // --- Context Menu & Modals ---
+    viewport.addEventListener('contextmenu', (e) => {
+        if(e.target.closest('#ui-layer')) return;
+        e.preventDefault();
+        const rectEl = e.target.closest('.rect');
+        const targetId = rectEl ? rectEl.id : null;
+        showContextMenu(e.clientX, e.clientY, targetId);
+    });
+
+    function showContextMenu(clientX, clientY, targetId) {
+        contextMenu.innerHTML = '';
+        const wPos = screenToWorkspace(clientX, clientY);
+
+        if (targetId) {
+            const addLinkItem = (text, type) => {
+                const div = document.createElement('div'); div.className = 'menu-item'; div.innerText = `Add Link ${text}`;
+                div.onclick = () => { enterLinkingMode(targetId, type); contextMenu.style.display = 'none'; };
+                contextMenu.appendChild(div);
+            };
+            addLinkItem('----', 1);
+            addLinkItem('--->', 2);
+            addLinkItem('<-->', 3);
+            addLinkItem('<---', 4);
+
+            const resizeDiv = document.createElement('div'); resizeDiv.className = 'menu-item'; resizeDiv.innerText = 'Resize';
+            resizeDiv.onclick = () => { enterResizeMode(targetId); contextMenu.style.display = 'none'; };
+            contextMenu.appendChild(resizeDiv);
+        } else {
+            const addRectDiv = document.createElement('div'); addRectDiv.className = 'menu-item'; addRectDiv.innerText = 'Add Rectangle';
+            addRectDiv.onclick = () => {
+                addRectangle(wPos.x, wPos.y);
+                contextMenu.style.display = 'none';
+            };
+            contextMenu.appendChild(addRectDiv);
+
+            if (state.clipboard && state.clipboard.rects.length > 0) {
+                const pasteDiv = document.createElement('div'); 
+                pasteDiv.className = 'menu-item'; 
+                pasteDiv.innerText = 'Paste';
+                pasteDiv.onclick = () => {
+                    pasteItems(wPos.x, wPos.y);
+                    contextMenu.style.display = 'none';
+                };
+                contextMenu.appendChild(pasteDiv);
+            }
+        }
+
+        contextMenu.style.left = clientX + 'px';
+        contextMenu.style.top = clientY + 'px';
+        contextMenu.style.display = 'block';
+    }
+
+
+    // --- Global Key Events ---
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            exitActiveMode();
+            exitLinkingMode();
+            exitResizeMode();
+            clearSelection();
+            lineDialog.style.display = 'none';
+            contextMenu.style.display = 'none';
+        }
+
+        if (e.key === 'Enter' && e.shiftKey) {
+            e.preventDefault();
+            const targetId = state.activeRectId || state.hoveredRectId;
+            if (targetId) {
+                const el = document.getElementById(targetId);
+                const rect = el.getBoundingClientRect();
+                showContextMenu(rect.left + rect.width/2, rect.top + rect.height/2, targetId);
+            }
+        } 
+        else if (e.key === 'Enter' && !e.shiftKey) {
+            if (state.hoveredRectId && !state.activeRectId) {
+                e.preventDefault();
+                enterActiveMode(state.hoveredRectId);
+            } else if (state.selectedLineIds.size === 1 && !state.activeRectId) {
+                e.preventDefault();
+                const lineId = Array.from(state.selectedLineIds)[0];
+                openWasdDialog(lineId);
+            }
+        }
+
+        if ((e.key === 'Delete' || e.key === 'Backspace') && !state.activeRectId) {
+            forceDelete();
+        }
+    });
+
+    // --- Core Operations ---
+    function addRectangle(x, y) {
+        const id = generateId();
+        state.rects[id] = { id, x, y, w: 150, h: 100, html: '' };
+        
+        const el = document.createElement('div');
+        el.id = id; el.className = 'rect';
+        
+        el.addEventListener('mouseenter', () => state.hoveredRectId = id);
+        el.addEventListener('mouseleave', () => { if (state.hoveredRectId === id) state.hoveredRectId = null; });
+        
+        el.addEventListener('mousedown', (e) => {
+            if(state.mode === 'linking') return; 
+            e.stopPropagation(); 
+            if (state.activeRectId !== id) enterActiveMode(id);
+        });
+
+        el.addEventListener('input', () => {
+            state.rects[id].html = el.innerHTML;
+        });
+
+        htmlLayer.appendChild(el);
+        updateRectDOM(id);
+    }
+
+    function updateRectDOM(id) {
+        const rect = state.rects[id];
+        const el = document.getElementById(id);
+        if(!el) return;
+        el.style.left = rect.x + 'px';
+        el.style.top = rect.y + 'px';
+        el.style.width = rect.w + 'px';
+        el.style.height = rect.h + 'px';
+        if (document.activeElement !== el && el.innerHTML !== rect.html) {
+            el.innerHTML = rect.html;
+        }
+    }
+
+    function enterActiveMode(id) {
+        exitActiveMode();
+        exitResizeMode();
+        state.activeRectId = id;
+        const el = document.getElementById(id);
+        el.classList.add('active');
+        el.contentEditable = "true";
+        el.focus();
+        textTools.style.display = 'flex';
+    }
+
+    function exitActiveMode() {
+        if (!state.activeRectId) return;
+        const el = document.getElementById(state.activeRectId);
+        if (el) {
+            el.contentEditable = "false";
+            el.classList.remove('active');
+            el.blur();
+        }
+        state.activeRectId = null;
+        textTools.style.display = 'none';
+        window.getSelection().removeAllRanges();
+    }
+
+    function enterResizeMode(id) {
+        exitActiveMode();
+        state.mode = 'resizing';
+        renderResizeHandles(id);
+    }
+
+    function exitResizeMode() {
+        state.mode = 'idle';
+        document.querySelectorAll('.resize-handle').forEach(el => el.remove());
+    }
+
+    function renderResizeHandles(id) {
+        document.querySelectorAll('.resize-handle').forEach(el => el.remove());
+        const rect = state.rects[id];
+        if(!rect) return;
+
+        const handles = ['tl', 'tm', 'tr', 'mr', 'br', 'bm', 'bl', 'ml'];
+        handles.forEach(pos => {
+            const h = document.createElement('div');
+            h.className = 'resize-handle';
+            
+            let hx = rect.x, hy = rect.y;
+            if (pos.includes('r')) hx += rect.w;
+            if (pos.includes('m') && (pos === 'tm' || pos === 'bm')) hx += rect.w / 2;
+            if (pos.includes('b')) hy += rect.h;
+            if (pos.includes('m') && (pos === 'ml' || pos === 'mr')) hy += rect.h / 2;
+
+            h.style.left = (hx - 7) + 'px';
+            h.style.top = (hy - 7) + 'px';
+            h.style.cursor = (pos === 'tl' || pos === 'br') ? 'nwse-resize' :
+                             (pos === 'tr' || pos === 'bl') ? 'nesw-resize' :
+                             (pos === 'tm' || pos === 'bm') ? 'ns-resize' : 'ew-resize';
+
+            h.addEventListener('mousedown', (e) => {
+                e.stopPropagation();
+                const wPos = screenToWorkspace(e.clientX, e.clientY);
+                state.resizeConfig = {
+                    id: id, handle: pos,
+                    startX: wPos.x, startY: wPos.y,
+                    startW: rect.w, startH: rect.h
+                };
+            });
+            htmlLayer.appendChild(h);
+        });
+    }
+
+    // --- Linking Math & Logic ---
+    function enterLinkingMode(srcId, type) {
+        exitActiveMode(); exitResizeMode(); clearSelection();
+        state.mode = 'linking';
+        state.linkSourceId = srcId;
+        state.linkType = type;
+        document.getElementById(srcId).classList.add('linking-source');
+    }
+    function exitLinkingMode() {
+        if(state.linkSourceId) {
+            const el = document.getElementById(state.linkSourceId);
+            if(el) el.classList.remove('linking-source');
+        }
+        state.mode = 'idle';
+        state.linkSourceId = null;
+        state.linkType = null;
+    }
+
+    function getMidpoints(rect) {
+        return {
+            'W': { x: rect.x + rect.w/2, y: rect.y },         
+            'A': { x: rect.x, y: rect.y + rect.h/2 },         
+            'S': { x: rect.x + rect.w/2, y: rect.y + rect.h },
+            'D': { x: rect.x + rect.w, y: rect.y + rect.h/2 } 
+        };
+    }
+
+    function renderLines() {
+        linesContainer.innerHTML = '';
+        state.lines.forEach(line => {
+            const src = state.rects[line.srcId];
+            const dst = state.rects[line.dstId];
+            if (!src || !dst) return; 
+
+            const sPoints = getMidpoints(src);
+            const dPoints = getMidpoints(dst);
+            
+            let sKey = 'W', dKey = 'W';
+            
+            if (line.wasd && line.wasd.length === 2) {
+                sKey = line.wasd[0].toUpperCase();
+                dKey = line.wasd[1].toUpperCase();
+                if(!sPoints[sKey]) sKey = 'W';
+                if(!dPoints[dKey]) dKey = 'W';
+            } else {
+                let minD = Infinity;
+                for(let s in sPoints) {
+                    for(let d in dPoints) {
+                        const dist = Math.hypot(sPoints[s].x - dPoints[d].x, sPoints[s].y - dPoints[d].y);
+                        if (dist < minD) { minD = dist; sKey = s; dKey = d; }
+                    }
+                }
+            }
+
+            const pt1 = sPoints[sKey];
+            const pt2 = dPoints[dKey];
+
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', `M ${pt1.x} ${pt1.y} L ${pt2.x} ${pt2.y}`);
+            path.setAttribute('stroke', '#333');
+            path.setAttribute('stroke-width', '4');
+            path.setAttribute('fill', 'none');
+
+            if (line.type === 2 || line.type === 3) path.setAttribute('marker-end', 'url(#arrow-end)');
+            if (line.type === 4 || line.type === 3) path.setAttribute('marker-start', 'url(#arrow-start)');
+
+            if (state.selectedLineIds.has(line.id)) {
+                path.classList.add('selected');
+            }
+
+            path.addEventListener('click', (e) => {
+                e.stopPropagation();
+                clearSelection();
+                state.selectedLineIds.add(line.id);
+                renderLines();
+            });
+
+            linesContainer.appendChild(path);
+        });
+    }
+
+    function openWasdDialog(lineId) {
+        const line = state.lines.find(l => l.id === lineId);
+        if(!line) return;
+        
+        lineDialog.style.display = 'block';
+        lineDialog.style.left = (window.innerWidth/2 - 75) + 'px';
+        lineDialog.style.top = (window.innerHeight/2 - 50) + 'px';
+        
+        const input = document.getElementById('line-wasd-input');
+        input.value = line.wasd || '';
+        input.focus();
+
+        document.getElementById('btn-apply-wasd').onclick = () => {
+            const val = input.value.toUpperCase();
+            if(val.length === 2 && /^[WASD]{2}$/.test(val)) {
+                line.wasd = val;
+            } else if (val === '') {
+                line.wasd = null; 
+            }
+            lineDialog.style.display = 'none';
+            renderLines();
+        };
+    }
+
+    // --- Selection, Deletion, Copy & Paste ---
+    function clearSelection() {
+        state.selectedLineIds.clear();
+        state.selectedRectIds.clear();
+        document.querySelectorAll('.rect.selected').forEach(el => el.classList.remove('selected'));
+        renderLines();
+    }
+
+    function computeSelectionBox() {
+        const rect = selectionBox.getBoundingClientRect();
+        const p1 = screenToWorkspace(rect.left, rect.top);
+        const p2 = screenToWorkspace(rect.right, rect.bottom);
+        const box = { x: p1.x, y: p1.y, w: p2.x - p1.x, h: p2.y - p1.y };
+
+        for (let id in state.rects) {
+            const r = state.rects[id];
+            if (r.x < box.x + box.w && r.x + r.w > box.x && r.y < box.y + box.h && r.y + r.h > box.y) {
+                state.selectedRectIds.add(id);
+                document.getElementById(id).classList.add('selected');
+            }
+        }
+
+        state.lines.forEach(line => {
+            const src = state.rects[line.srcId]; const dst = state.rects[line.dstId];
+            if(!src || !dst) return;
+            const minX = Math.min(src.x+src.w/2, dst.x+dst.w/2);
+            const maxX = Math.max(src.x+src.w/2, dst.x+dst.w/2);
+            const minY = Math.min(src.y+src.h/2, dst.y+dst.h/2);
+            const maxY = Math.max(src.y+src.h/2, dst.y+dst.h/2);
+            
+            if (minX < box.x + box.w && maxX > box.x && minY < box.y + box.h && maxY > box.y) {
+                state.selectedLineIds.add(line.id);
+            }
+        });
+        renderLines();
+    }
+
+    // 🔥 THE MERCILESS FORCE DELETE FUNCTION 🔥
+    function forceDelete() {
+        let itemsDeleted = false;
+
+        if (state.activeRectId) {
+            const id = state.activeRectId;
+            exitActiveMode();
+            delete state.rects[id];
+            const el = document.getElementById(id);
+            if(el) el.remove();
+            itemsDeleted = true;
+        }
+
+        if (state.selectedRectIds.size > 0) {
+            state.selectedRectIds.forEach(id => {
+                if (state.activeRectId === id) exitActiveMode();
+                delete state.rects[id];
+                const el = document.getElementById(id);
+                if(el) el.remove();
+            });
+            itemsDeleted = true;
+        }
+
+        const initialLineCount = state.lines.length;
+        state.lines = state.lines.filter(l => {
+            if (state.selectedLineIds.has(l.id)) return false; 
+            if (!state.rects[l.srcId] || !state.rects[l.dstId]) return false; 
+            return true;
+        });
+
+        if (itemsDeleted || state.lines.length !== initialLineCount) {
+            clearSelection();
+            exitResizeMode();
+            renderLines();
+        }
+    }
+
+    function copySelected() {
+        if (state.selectedRectIds.size === 0) return;
+
+        state.clipboard = { rects: [], lines: [], baseX: Infinity, baseY: Infinity };
+
+        state.selectedRectIds.forEach(id => {
+            const r = state.rects[id];
+            state.clipboard.rects.push(JSON.parse(JSON.stringify(r)));
+            if (r.x < state.clipboard.baseX) state.clipboard.baseX = r.x;
+            if (r.y < state.clipboard.baseY) state.clipboard.baseY = r.y;
+        });
+
+        state.lines.forEach(line => {
+            if (state.selectedRectIds.has(line.srcId) && state.selectedRectIds.has(line.dstId)) {
+                state.clipboard.lines.push(JSON.parse(JSON.stringify(line)));
+            }
+        });
+    }
+
+    function pasteItems(targetX, targetY) {
+        if (!state.clipboard || state.clipboard.rects.length === 0) return;
+
+        const idMap = {}; 
+        const offsetX = targetX - state.clipboard.baseX;
+        const offsetY = targetY - state.clipboard.baseY;
+
+        clearSelection();
+
+        state.clipboard.rects.forEach(rect => {
+            const newId = generateId();
+            idMap[rect.id] = newId;
+
+            const newRect = {
+                ...rect,
+                id: newId,
+                x: rect.x + offsetX,
+                y: rect.y + offsetY
+            };
+            state.rects[newId] = newRect;
+
+            const el = document.createElement('div');
+            el.id = newId; 
+            el.className = 'rect selected';
+            el.innerHTML = newRect.html;
+
+            el.addEventListener('mouseenter', () => state.hoveredRectId = newId);
+            el.addEventListener('mouseleave', () => { if (state.hoveredRectId === newId) state.hoveredRectId = null; });
+            el.addEventListener('mousedown', (e) => {
+                if(state.mode === 'linking') return;
+                e.stopPropagation();
+                if (state.activeRectId !== newId) enterActiveMode(newId);
+            });
+            el.addEventListener('input', () => state.rects[newId].html = el.innerHTML);
+
+            htmlLayer.appendChild(el);
+            updateRectDOM(newId);
+            
+            state.selectedRectIds.add(newId);
+        });
+
+        state.clipboard.lines.forEach(line => {
+            const newLineId = generateId();
+            const newLine = {
+                ...line,
+                id: newLineId,
+                srcId: idMap[line.srcId],
+                dstId: idMap[line.dstId]
+            };
+            state.lines.push(newLine);
+        });
+
+        renderLines();
+    }
+
+    // --- Toolbar Button Bindings ---
+    document.getElementById('btn-delete').onclick = () => {
+        forceDelete(); 
+    };
+
+    document.getElementById('btn-copy').onclick = () => {
+        copySelected();
+    };
+
+    // --- Viewport Utilities ---
+    function applyTransform() {
+        workspace.style.transform = `translate(${state.offsetX}px, ${state.offsetY}px) scale(${state.scale})`;
+    }
+
+    document.getElementById('btn-reset-focus').onclick = () => {
+        const keys = Object.keys(state.rects);
+        if (keys.length === 0) return;
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        keys.forEach(id => {
+            const r = state.rects[id];
+            if(r.x < minX) minX = r.x; if(r.y < minY) minY = r.y;
+            if(r.x+r.w > maxX) maxX = r.x+r.w; if(r.y+r.h > maxY) maxY = r.y+r.h;
+        });
+
+        const padding = 50;
+        const w = (maxX - minX) + padding * 2;
+        const h = (maxY - minY) + padding * 2;
+        
+        const scaleX = window.innerWidth / w;
+        const scaleY = window.innerHeight / h;
+        state.scale = Math.min(scaleX, scaleY, 1); 
+
+        const contentCenterX = minX + (maxX - minX) / 2;
+        const contentCenterY = minY + (maxY - minY) / 2;
+
+        state.offsetX = window.innerWidth/2 - (contentCenterX * state.scale);
+        state.offsetY = window.innerHeight/2 - (contentCenterY * state.scale);
+
+        applyTransform();
+    };
+
+
+    // --- Save / Load ---
+    document.getElementById('btn-save').onclick = () => {
+        exitActiveMode();
+        const jsonStr = JSON.stringify({ rects: state.rects, lines: state.lines });
+        const blob = new Blob([jsonStr], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = "canvas_progress.json";
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    document.getElementById('btn-load').onclick = () => fileInput.click();
+
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try {
+                const data = JSON.parse(ev.target.result);
+                state.rects = data.rects || {};
+                state.lines = data.lines || [];
+                state.offsetX = 0; state.offsetY = 0; state.scale = 1;
+                htmlLayer.innerHTML = '';
+                
+                for (let id in state.rects) {
+                    const r = state.rects[id];
+                    const el = document.createElement('div');
+                    el.id = id; el.className = 'rect';
+                    el.innerHTML = r.html;
+                    el.addEventListener('mouseenter', () => state.hoveredRectId = id);
+                    el.addEventListener('mouseleave', () => { if (state.hoveredRectId === id) state.hoveredRectId = null; });
+                    el.addEventListener('mousedown', (e) => {
+                        if(state.mode === 'linking') return;
+                        e.stopPropagation();
+                        if (state.activeRectId !== id) enterActiveMode(id);
+                    });
+                    el.addEventListener('input', () => state.rects[id].html = el.innerHTML);
+                    htmlLayer.appendChild(el);
+                    updateRectDOM(id);
+                }
+                
+                applyTransform();
+                renderLines();
+                document.getElementById('btn-reset-focus').click();
+
+            } catch(err) {
+                alert("Invalid JSON file.");
+            }
+        };
+        reader.readAsText(file);
+        fileInput.value = ''; 
+    });
+
+    applyTransform();
+</script>
+
+</body>
+</html>
